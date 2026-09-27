@@ -67,7 +67,7 @@ The analysis demonstrates how regression can support a more data-driven approach
 
 * `CampusRentals.csv` — Dataset
 * `Campus_Rentals.Rmd` — R Markdown analysis
-* `Campus_Rentals.html` — HTML report
+* `index.html` — HTML report
 * `README.md` — Project documentation
 
 
