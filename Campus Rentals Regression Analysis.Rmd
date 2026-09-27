@@ -1,0 +1,275 @@
+---
+title: "Campus Rentals"
+author: "Subhechha Khatri"
+date: "2026-09-21"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    number_sections: false
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      fig.width = 7, fig.height = 4.5)
+```
+
+**Business problem.** Maple Street Property Management rents out 120 apartments near a university campus. The dataset *CampusRentals.csv* containsthe size, number of bedrooms, distance to campus, building age, whether the apartment comes with a parking space, and the current monthly rent for each unit.
+The property manager currently sets asking rents by gut feeling. This report builds a regression model for monthly rent, checks it, and tells the manager  what a new listing should rent for.
+
+```{r packages}
+library(tidyverse)
+```
+
+# Task 1: Read the data and look at it
+
+```{r read-data}
+rentals <- read_csv("CampusRentals.csv", show_col_types = FALSE)
+
+glimpse(rentals)
+
+summary(rentals)
+```
+
+*Interpretation:* The dataset contains **120 apartments** with seven variables covering size, bedrooms, distance, age, parking, and rent. 
+Apartment size ranges from **374 to 1,327 sq. ft.**, with a median of **774 sq. ft.**, while most apartments have **1–2 bedrooms**. Apartments are typically about **3.35 km from the campus** and **20 years old**. Parking is evenly split, with half of the apartments including parking. Monthly rent ranges from **\$614 to \$1,717**, with a median of **\$1,041.50** and an average of **\$1,090.20**, indicating a fairly broad range of rental prices across the dataset.
+
+
+## (a) Rent against size, coloured by parking
+
+```{r plot-sqft-parking}
+rentals %>%
+  ggplot(aes(x = sqft, y = rent, color = factor(parking))) +
+  geom_point(size = 2, alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_color_manual(values = c("0" = "lightgreen", "1" = "skyblue"),
+                     labels = c("No parking", "Parking included")) +
+  labs(title = "Monthly Rent vs Apartment Size",
+       x = "Size (square feet)", y = "Monthly rent ($)",
+       color = "Parking") +
+  theme_minimal()
+```
+
+*Interpretation:* The scatterplot shows a positive relationship between apartment size and monthly rent, indicating that larger apartments tend to have higher rents. It also shows that apartments with parking generally have higher rents than those without parking.
+
+
+## (b) Rent against each numeric predictor
+
+```{r plot-all-predictors, fig.width = 8, fig.height = 6}
+rentals %>%
+  pivot_longer(c(sqft, bedrooms, dist_km, age_years),
+               names_to = "predictor", values_to = "value") %>%
+  ggplot(aes(x = value, y = rent)) +
+  geom_point(color = "steelblue", size = 1.8, alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, color = "pink") +
+  facet_wrap(~ predictor, scales = "free_x") +
+  labs(title = "What is related to monthly rent?",
+       x = "Predictor value (sqft = sq ft, bedrooms = count, dist_km = km, age_years = years)",
+       y = "Monthly rent ($)") +
+  theme_minimal()
+```
+
+## Correlations
+
+```{r correlations}
+rentals %>%
+  select(-apt_id) %>%
+  cor() %>%
+  round(2)
+```
+
+*Interpretation:* 
+The small-multiples plot and correlation matrix show that apartment size (sq ft) has the strongest relationship with rent, with a correlation coefficient of **r = 0.86**, followed by the number of bedrooms. However, sq ft and the number of bedrooms are also highly correlated (**r = 0.91**), suggesting potential multicollinearity if both variables are included in the same model. At this stage, we are not removing either variable; this relationship will be considered during the modeling phase.
+
+Rent also has negative relationships with both distance and apartment age, indicating that newer and apartments located closer to campus tend to have higher rents. In contrast, parking does not appear to have a any significant relationship with rent.
+
+
+# Task 2: Split the data
+
+```{r split}
+set.seed(123)
+train_rows <- sample(nrow(rentals), size = 0.7 * nrow(rentals))   # 70% train
+train <- rentals[train_rows, ]
+valid <- rentals[-train_rows, ]                                    # 30% validation
+
+cat("Training rows:  ", nrow(train), "\n")
+cat("Validation rows:", nrow(valid), "\n")
+```
+
+**Why is a random split the right choice here?** The random split resulted in 84 observations for training and 36 observations for validation.
+
+A random split is appropriate because the 120 apartments are independent properties with no time order or grouping to preserve. The 70/30 split provides both sets with a mix of apartments and allows us to evaluate the model on new observations. This approach would not be suitable for time-ordered data, where past observations should be used to predict future ones.
+
+
+# Task 3: Fit two models
+
+## Simple model
+
+```{r model-simple}
+model_simple <- lm(rent ~ sqft, data = train)
+summary(model_simple)
+```
+
+The model shows that sqft is a statistically significant positive predictor of rent (p < 2e-16), explaining about 72.3% of the variation in rent (R² = 0.7234).
+
+
+## Full model
+
+```{r model-full}
+model_full <- lm(rent ~ sqft + bedrooms + dist_km + age_years + parking, data = train)
+summary(model_full)
+```
+**sqft coefficient = 0.918:** Holding the other predictors fixed, each additional 1 square foot is associated with an increase of about $0.92 in monthly rent.
+
+**Parking coefficient = 65.65:** Holding the other predictors fixed, an apartment with parking is associated with about $65.65 higher monthly rent compared with an otherwise similar apartment without parking.
+
+**Large p-value:** Bedrooms is not statistically significant (p = 0.569), meaning it does not add much information about rent after accounting for the other variables.
+However, I am not dropping it just yet.
+
+
+# Task 4: Check the residuals
+
+```{r residual-data}
+#add fitted values (predicted rent) and residuals (prediction errors) to the training dataset
+train_aug <- train %>%
+  mutate(fitted = fitted(model_full),
+         resid  = residuals(model_full))
+```
+
+```{r resid-vs-fitted}
+train_aug %>%
+  ggplot(aes(x = fitted, y = resid)) +
+  geom_point(color = "purple", size = 2) +
+  geom_hline(yintercept = 0, color = "black") +
+  labs(title = "Residuals vs Fitted (Full Model)",
+       x = "Fitted Rent ($)", 
+       y = "Residual ($)") +
+  theme_minimal()
+```
+```{r resid-hist}
+train_aug %>%
+  ggplot(aes(x = resid)) +
+  geom_histogram(bins = 12, fill = "skyblue", color = "white") +
+  labs(title = "Histogram of Residuals (Full Model)",
+       x = "Residual ($)", y = "Count") +
+  theme_minimal()
+```
+```{r shapiro}
+shapiro.test(residuals(model_full))
+```
+
+**(a) Neither curve nor funnel:**
+The residuals-vs-fitted plot shows no clear curve or funnel. The points are fairly evenly spread above and below zero across the fitted values, except for two outliers around fitted values of approximately 1,000 and 1,550. 
+
+A curve would mean the model is missing a pattern in how the predictors relate to rent, while a funnel would mean the size of the errors changes at different rent levels. 
+Since neither pattern is present, the model appears to meet the basic requirements for a straight-line model.
+
+
+
+**(b)**
+
+* **H₀:** The residuals are normally distributed.
+* **H₁:** The residuals are not normally distributed.
+* **p = 0.315**
+* **Significance level = 0.05**
+
+A W of 0.98 is close to 1 on the 0–1 scale, indicating the residuals' distribution is close to normal. Since **p = 0.315 > 0.05**, we fail to reject H₀, meaning the residuals are consistent with a normal distribution.
+
+This matters for Task 6 because normally distributed residuals support the use of **confidence and prediction intervals**, meaning the confidence and prediction intervals are statistically valid, not just numerically computed.
+
+
+# Task 5: Select and score
+
+## Backward elimination
+
+```{r step}
+model_step <- step(model_full, direction = "backward")
+summary(model_step)
+```
+
+`step()` removed **bedrooms**. 
+This coincides with the previous analysis since bedrooms is highly correlated with sqft (**r = 0.91**), meaning these two variables provide similar information about apartment size. 
+Additionally, Bedrooms had a large p-value (**p = 0.569**), showing that it did not add much explanatory value after the other predictors were included.
+
+
+
+##RSME to predict the validation set with all three models (simple, full, step)
+
+```{r rmse, include=FALSE}
+rmse <- function(actual, predicted) sqrt(mean((actual - predicted)^2))
+
+pred_simple <- predict(model_simple, newdata = valid)
+pred_full   <- predict(model_full,   newdata = valid)
+pred_step   <- predict(model_step,   newdata = valid)
+```
+
+```{r comparison}
+comparison <- tibble(
+  model      = c("Simple", "Full", "Step"),
+  valid_rmse = c(rmse(valid$rent, pred_simple),
+                 rmse(valid$rent, pred_full),
+                 rmse(valid$rent, pred_step)),
+  adj_r_sq   = c(summary(model_simple)$adj.r.squared,
+                 summary(model_full)$adj.r.squared,
+                 summary(model_step)$adj.r.squared)
+) %>%
+  arrange(valid_rmse) %>%
+  mutate(valid_rmse = round(valid_rmse, 2),
+         adj_r_sq   = round(adj_r_sq, 3))
+
+knitr::kable(comparison, col.names = c("Model", "Validation RMSE ($)", "Adjusted R²"))
+```
+
+**Interpretation**
+
+The **Full model** wins because it has the lowest validation RMSE (**$65.12**), compared with **$65.79** for the Step model. Although the difference is small, the Full model performed slightly better when predicting new data, so I used it to estimate the rent for the new listing.
+
+Validation RMSE is a better measure because it shows how well the model predicts new data, while training R² only shows how well it fits the training data.
+In this case, RMSE of $65.12 in the full model means its predictions are, on average, about $65.12 away from the actual rent values in the validation data.
+
+The Simple model performs worse because it uses only sqft. The Full and Step models include other factors, such as distance, age, and parking, which improve the rent predictions.
+
+
+
+# Task 6: The recommendation
+New Listing: 900 sq ft, 2 bedrooms, 2.0 km from campus, a 10-year-old building,
+with parking.
+
+```{r new-listing}
+# New apartment
+new_listing <- tibble(
+  sqft = 900,
+  bedrooms = 2,
+  dist_km = 2.0,
+  age_years = 10,
+  parking = 1
+)
+
+# Predicted rent with prediction interval
+predict(model_full, newdata = new_listing, interval = "prediction")
+```
+
+**My recommendation to the manager:** 
+I recommend listing the new apartment at about $1342 per month. The upper and lower range for this listing are from $1211 to $1473.
+
+I have used the full regression model to predict the monthly rent which includes all available variables (sqft, bedroom, dist_km, age and parking). This is because the full model provides the closest prediction to the actual rent in the data, with errors of only about $65 as shown by the RSME. 
+
+In addition, the prediction error or residuals, are more or less normally distributed, so the interval range is statistically valid, not just numerically computed.
+
+I would consider this model to be the best predictor given all the current variables. However, to improve the model, I would also add a variable for interior amenities (such as in-unit laundry, utilities, Central AC, updated appliances) because these factors could significantly affect the overall value of an apartment.
+
+
+
+
+# Citations & Attribution
+
+* R Core Team (2026). R: A Language and Environment for Statistical Computing. https://www.R-project.org/
+* Dataset: CampusRentals.csv
+* R packages: tidyverse (Wickham et al., 2019), which bundles dplyr, ggplot2, tibble, and others; knitr (Xie, 2025)
+
+**R code:** The code used in this analysis is part of the course/class materials and was adapted as needed for the CampusRentals.csv dataset.
+
+**AI Assistance Disclosure:** Claude (Anthropic) was used as a supplementary learning and interpretation tool to help understand statistical output and concepts. Link to chat: https://claude.ai/share/bc87a90e-58b2-4006-aa37-b17b396907d5  
+
